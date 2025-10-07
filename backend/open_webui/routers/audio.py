@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import logging
@@ -816,6 +817,95 @@ def transcription_handler(request, file_path, metadata):
             raise HTTPException(
                 status_code=getattr(r, "status_code", 500) if r else 500,
                 detail=detail if detail else "Open WebUI: Server Connection Error",
+            )
+
+    elif request.app.state.config.STT_ENGINE == "ollama":
+        base_urls = getattr(request.app.state.config, "OLLAMA_BASE_URLS", [])
+        if isinstance(base_urls, str):
+            base_urls = [base_urls]
+
+        if not base_urls:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ollama base URL is not configured",
+            )
+
+        model = request.app.state.config.STT_MODEL or "whisper"
+
+        base_url = base_urls[0].rstrip("/")
+        if base_url.endswith("/api"):
+            api_url = f"{base_url}/generate"
+        else:
+            api_url = f"{base_url}/api/generate"
+
+        audio_format = os.path.splitext(file_path)[1][1:].lower() or "mp3"
+
+        with open(file_path, "rb") as audio_file:
+            audio_data = base64.b64encode(audio_file.read()).decode("utf-8")
+
+        payload = {
+            "model": model,
+            "prompt": "Transcribe the provided audio accurately.",
+            "stream": False,
+            "input_audio": [
+                {
+                    "format": audio_format,
+                    "data": audio_data,
+                }
+            ],
+        }
+
+        if languages[0]:
+            payload["options"] = {"language": languages[0]}
+
+        try:
+            r = requests.post(api_url, json=payload, timeout=120)
+            r.raise_for_status()
+            response_data = r.json()
+
+            transcript = (
+                response_data.get("response")
+                or response_data.get("text")
+                or response_data.get("transcription")
+                or ""
+            )
+
+            if isinstance(transcript, dict):
+                transcript = transcript.get("text", "")
+
+            transcript = str(transcript).strip()
+            if not transcript:
+                raise ValueError("Empty transcription received from Ollama")
+
+            data = {"text": transcript}
+
+            transcript_file = f"{file_dir}/{id}.json"
+            with open(transcript_file, "w") as f:
+                json.dump(data, f)
+
+            return data
+
+        except requests.exceptions.RequestException as e:
+            log.exception(e)
+            detail = None
+
+            try:
+                if "r" in locals() and r is not None and r.status_code != 200:
+                    res = r.json()
+                    if "error" in res:
+                        detail = res["error"].get("message", str(e))
+            except Exception:
+                detail = str(e)
+
+            raise HTTPException(
+                status_code=getattr(r, "status_code", 500) if "r" in locals() else 500,
+                detail=detail or "Open WebUI: Server Connection Error",
+            )
+        except Exception as e:
+            log.exception(e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
             )
 
 

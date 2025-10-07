@@ -1386,7 +1386,7 @@
 								</div>
 
 								<div class=" flex justify-between mt-0.5 mb-2.5 mx-0.5 max-w-full" dir="ltr">
-									<div class="ml-1 self-end flex items-center flex-1 max-w-[80%]">
+									<div class="ml-1 self-end flex items-center flex-1 max-w-[80%]" style="display: none;">
 										<InputMenu
 											bind:files
 											selectedModels={atSelectedModel ? [atSelectedModel.id] : selectedModels}
@@ -1453,7 +1453,7 @@
 											class="flex self-center w-[1px] h-4 mx-1 bg-gray-200/50 dark:bg-gray-800/50"
 										/>
 
-										{#if showWebSearchButton || showImageGenerationButton || showCodeInterpreterButton || showToolsButton || (toggleFilters && toggleFilters.length > 0)}
+										{#if false && (showWebSearchButton || showImageGenerationButton || showCodeInterpreterButton || showToolsButton || (toggleFilters && toggleFilters.length > 0))}
 											<IntegrationsMenu
 												selectedModels={atSelectedModel ? [atSelectedModel.id] : selectedModels}
 												{toggleFilters}
@@ -1487,7 +1487,7 @@
 											</IntegrationsMenu>
 										{/if}
 
-										{#if selectedModelIds.length === 1 && $models.find((m) => m.id === selectedModelIds[0])?.has_user_valves}
+										{#if false && selectedModelIds.length === 1 && $models.find((m) => m.id === selectedModelIds[0])?.has_user_valves}
 											<div class="ml-1 flex gap-1.5">
 												<Tooltip content={$i18n.t('Valves')} placement="top">
 													<button
@@ -1506,7 +1506,7 @@
 										{/if}
 
 										<div class="ml-1 flex gap-1.5">
-											{#if (selectedToolIds ?? []).length > 0}
+											{#if false && (selectedToolIds ?? []).length > 0}
 												<Tooltip
 													content={$i18n.t('{{COUNT}} Available Tools', {
 														COUNT: selectedToolIds.length
@@ -1529,7 +1529,7 @@
 												</Tooltip>
 											{/if}
 
-											{#each selectedFilterIds as filterId}
+											{#each [] as filterId}
 												{@const filter = toggleFilters.find((f) => f.id === filterId)}
 												{#if filter}
 													<Tooltip content={filter?.name} placement="top">
@@ -1568,7 +1568,7 @@
 												{/if}
 											{/each}
 
-											{#if webSearchEnabled}
+											{#if false && webSearchEnabled}
 												<Tooltip content={$i18n.t('Web Search')} placement="top">
 													<button
 														on:click|preventDefault={() => (webSearchEnabled = !webSearchEnabled)}
@@ -1586,7 +1586,7 @@
 												</Tooltip>
 											{/if}
 
-											{#if imageGenerationEnabled}
+											{#if false && imageGenerationEnabled}
 												<Tooltip content={$i18n.t('Image')} placement="top">
 													<button
 														on:click|preventDefault={() =>
@@ -1604,7 +1604,7 @@
 												</Tooltip>
 											{/if}
 
-											{#if codeInterpreterEnabled}
+											{#if false && codeInterpreterEnabled}
 												<Tooltip content={$i18n.t('Code Interpreter')} placement="top">
 													<button
 														aria-label={codeInterpreterEnabled
@@ -1707,7 +1707,7 @@
 													</button>
 												</Tooltip>
 											</div>
-										{:else if prompt === '' && files.length === 0 && ($_user?.role === 'admin' || ($_user?.permissions?.chat?.call ?? true))}
+										{:else if false && prompt === '' && files.length === 0 && ($_user?.role === 'admin' || ($_user?.permissions?.chat?.call ?? true))}
 											<div class=" flex items-center">
 												<!-- {$i18n.t('Call')} -->
 												<Tooltip content={$i18n.t('Voice mode')}>

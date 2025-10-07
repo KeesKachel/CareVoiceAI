@@ -221,6 +221,7 @@
 							<option value="openai">{$i18n.t('OpenAI')}</option>
 							<option value="web">{$i18n.t('Web API')}</option>
 							<option value="deepgram">{$i18n.t('Deepgram')}</option>
+							<option value="ollama">{$i18n.t('Ollama')}</option>
 							<option value="azure">{$i18n.t('Azure AI Speech')}</option>
 						</select>
 					</div>
@@ -352,6 +353,23 @@
 									/>
 								</div>
 							</div>
+						</div>
+					</div>
+				{:else if STT_ENGINE === 'ollama'}
+					<div>
+						<div class=" mb-1.5 text-xs font-medium">{$i18n.t('STT Model')}</div>
+						<div class="flex w-full">
+							<div class="flex-1">
+								<input
+									class="w-full rounded-lg py-2 px-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden"
+									bind:value={STT_MODEL}
+									placeholder={$i18n.t('e.g., whisper:latest')}
+								/>
+							</div>
+						</div>
+
+						<div class="mt-2 mb-1 text-xs text-gray-400 dark:text-gray-500">
+							{$i18n.t('Ollama uses the configured base URL(s) from the Ollama settings. Set the transcription model name here or leave blank for whisper.')}
 						</div>
 					</div>
 				{:else if STT_ENGINE === ''}
