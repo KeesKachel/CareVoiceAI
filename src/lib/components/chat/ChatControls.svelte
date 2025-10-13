@@ -34,6 +34,7 @@
 	export let submitPrompt: Function;
 	export let stopResponse: Function;
 	export let showMessage: Function;
+	export let onTranscription: Function = null; // Callback to add transcription to input
 	export let files;
 	export let modelId;
 
@@ -179,6 +180,7 @@
 								{modelId}
 								{chatId}
 								{eventTarget}
+								{onTranscription}
 								on:close={() => {
 									showControls.set(false);
 								}}
@@ -266,6 +268,7 @@
 									{modelId}
 									{chatId}
 									{eventTarget}
+									{onTranscription}
 									on:close={() => {
 										showControls.set(false);
 									}}

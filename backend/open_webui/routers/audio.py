@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import logging
@@ -26,6 +27,8 @@ from fastapi import (
     UploadFile,
     status,
     APIRouter,
+    WebSocket,
+    WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -818,6 +821,95 @@ def transcription_handler(request, file_path, metadata):
                 detail=detail if detail else "Open WebUI: Server Connection Error",
             )
 
+    elif request.app.state.config.STT_ENGINE == "ollama":
+        base_urls = getattr(request.app.state.config, "OLLAMA_BASE_URLS", [])
+        if isinstance(base_urls, str):
+            base_urls = [base_urls]
+
+        if not base_urls:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Ollama base URL is not configured",
+            )
+
+        model = request.app.state.config.STT_MODEL or "whisper"
+
+        base_url = base_urls[0].rstrip("/")
+        if base_url.endswith("/api"):
+            api_url = f"{base_url}/generate"
+        else:
+            api_url = f"{base_url}/api/generate"
+
+        audio_format = os.path.splitext(file_path)[1][1:].lower() or "mp3"
+
+        with open(file_path, "rb") as audio_file:
+            audio_data = base64.b64encode(audio_file.read()).decode("utf-8")
+
+        payload = {
+            "model": model,
+            "prompt": "Transcribe the provided audio accurately.",
+            "stream": False,
+            "input_audio": [
+                {
+                    "format": audio_format,
+                    "data": audio_data,
+                }
+            ],
+        }
+
+        if languages[0]:
+            payload["options"] = {"language": languages[0]}
+
+        try:
+            r = requests.post(api_url, json=payload, timeout=120)
+            r.raise_for_status()
+            response_data = r.json()
+
+            transcript = (
+                response_data.get("response")
+                or response_data.get("text")
+                or response_data.get("transcription")
+                or ""
+            )
+
+            if isinstance(transcript, dict):
+                transcript = transcript.get("text", "")
+
+            transcript = str(transcript).strip()
+            if not transcript:
+                raise ValueError("Empty transcription received from Ollama")
+
+            data = {"text": transcript}
+
+            transcript_file = f"{file_dir}/{id}.json"
+            with open(transcript_file, "w") as f:
+                json.dump(data, f)
+
+            return data
+
+        except requests.exceptions.RequestException as e:
+            log.exception(e)
+            detail = None
+
+            try:
+                if "r" in locals() and r is not None and r.status_code != 200:
+                    res = r.json()
+                    if "error" in res:
+                        detail = res["error"].get("message", str(e))
+            except Exception:
+                detail = str(e)
+
+            raise HTTPException(
+                status_code=getattr(r, "status_code", 500) if "r" in locals() else 500,
+                detail=detail or "Open WebUI: Server Connection Error",
+            )
+        except Exception as e:
+            log.exception(e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e),
+            )
+
 
 def transcribe(request: Request, file_path: str, metadata: Optional[dict] = None):
     log.info(f"transcribe: {file_path} {metadata}")
@@ -1158,3 +1250,133 @@ async def get_voices(request: Request, user=Depends(get_verified_user)):
             {"id": k, "name": v} for k, v in get_available_voices(request).items()
         ]
     }
+
+
+@router.websocket("/transcriptions/stream")
+async def transcribe_stream(websocket: WebSocket):
+    """WebSocket endpoint for real-time Azure Speech transcription"""
+    await websocket.accept()
+    
+    try:
+        # Receive initialization message
+        init_data = await websocket.receive_json()
+        
+        if init_data.get("type") != "init":
+            await websocket.send_json({"type": "error", "message": "Expected init message"})
+            await websocket.close()
+            return
+        
+        api_key = init_data.get("api_key")
+        region = init_data.get("region", "eastus")
+        language = init_data.get("language", "en-US")
+        
+        if not api_key:
+            await websocket.send_json({"type": "error", "message": "Missing Azure API key"})
+            await websocket.close()
+            return
+        
+        # Import Azure Speech SDK
+        try:
+            import azure.cognitiveservices.speech as speechsdk
+        except ImportError:
+            await websocket.send_json({"type": "error", "message": "Azure Speech SDK not installed"})
+            await websocket.close()
+            return
+        
+        # Configure Azure Speech
+        speech_config = speechsdk.SpeechConfig(subscription=api_key, region=region)
+        speech_config.speech_recognition_language = language
+        
+        # Create push stream for incoming audio
+        push_stream = speechsdk.audio.PushAudioInputStream()
+        audio_config = speechsdk.audio.AudioConfig(stream=push_stream)
+        
+        # Create speech recognizer
+        speech_recognizer = speechsdk.SpeechRecognizer(
+            speech_config=speech_config,
+            audio_config=audio_config
+        )
+        
+        # Track full transcription
+        full_transcription = ""
+        
+        # Event handlers for recognition
+        def recognizing_cb(evt):
+            """Handles partial recognition results"""
+            nonlocal full_transcription
+            try:
+                import asyncio
+                asyncio.create_task(websocket.send_json({
+                    "type": "partial",
+                    "text": evt.result.text,
+                    "offset": evt.result.offset,
+                    "duration": evt.result.duration
+                }))
+            except Exception as e:
+                log.error(f"Error sending partial result: {e}")
+        
+        def recognized_cb(evt):
+            """Handles final recognition results"""
+            nonlocal full_transcription
+            try:
+                if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                    full_transcription += " " + evt.result.text
+                    import asyncio
+                    asyncio.create_task(websocket.send_json({
+                        "type": "final",
+                        "text": full_transcription.strip(),
+                        "offset": evt.result.offset,
+                        "duration": evt.result.duration
+                    }))
+            except Exception as e:
+                log.error(f"Error sending final result: {e}")
+        
+        # Connect event handlers
+        speech_recognizer.recognizing.connect(recognizing_cb)
+        speech_recognizer.recognized.connect(recognized_cb)
+        
+        # Start continuous recognition
+        speech_recognizer.start_continuous_recognition()
+        
+        # Send ready signal
+        await websocket.send_json({"type": "ready"})
+        
+        # Process incoming audio data
+        while True:
+            message = await websocket.receive()
+            
+            if message["type"] == "websocket.receive":
+                if "bytes" in message:
+                    # Audio data
+                    audio_data = message["bytes"]
+                    push_stream.write(audio_data)
+                    
+                elif "text" in message:
+                    # Control message
+                    try:
+                        data = json.loads(message["text"])
+                        if data.get("type") == "stop":
+                            break
+                    except json.JSONDecodeError:
+                        pass
+                        
+            elif message["type"] == "websocket.disconnect":
+                break
+        
+        # Cleanup
+        speech_recognizer.stop_continuous_recognition()
+        push_stream.close()
+        
+    except WebSocketDisconnect:
+        log.info("WebSocket disconnected")
+    except Exception as e:
+        log.error(f"Error in transcription stream: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
