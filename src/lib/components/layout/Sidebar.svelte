@@ -626,6 +626,7 @@
 					</div>
 				{/if}
 
+				<!-- Workspace option hidden
 				{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
 					<div class="">
 						<Tooltip content={$i18n.t('Workspace')} placement="right">
@@ -662,6 +663,7 @@
 						</Tooltip>
 					</div>
 				{/if}
+				-->
 			</div>
 		</button>
 
@@ -834,6 +836,7 @@
 						</div>
 					{/if}
 
+				<!-- Workspace option hidden
 					{#if $user?.role === 'admin' || $user?.permissions?.workspace?.models || $user?.permissions?.workspace?.knowledge || $user?.permissions?.workspace?.prompts || $user?.permissions?.workspace?.tools}
 						<div class="px-[7px] flex justify-center text-gray-800 dark:text-gray-200">
 							<a
@@ -867,6 +870,7 @@
 							</a>
 						</div>
 					{/if}
+				-->
 				</div>
 
 				{#if ($models ?? []).length > 0 && ($settings?.pinnedModels ?? []).length > 0}
