@@ -1284,6 +1284,7 @@ Provide the enhanced notes in markdown format. Use markdown syntax for headings,
 							{files}
 							placeholder={$i18n.t('Write something...')}
 							editable={versionIdx === null && !editing}
+							showFormattingToolbar={false}
 							onSelectionUpdate={({ editor }) => {
 								const { from, to } = editor.state.selection;
 								const selectedText = editor.state.doc.textBetween(from, to, ' ');
