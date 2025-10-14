@@ -2511,12 +2511,6 @@
 					{stopResponse}
 					{showMessage}
 					{eventTarget}
-					onTranscription={(text) => {
-						// Add transcription to message input
-						const currentText = messageInput?.getText() || '';
-						const newText = currentText ? `${currentText} ${text}`.trim() : text;
-						messageInput?.setText(newText);
-					}}
 				/>
 			</PaneGroup>
 		</div>

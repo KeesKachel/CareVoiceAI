@@ -305,10 +305,6 @@
 		}
 	};
 
-	export const getText = () => {
-		return prompt || '';
-	};
-
 	const getCommand = () => {
 		const chatInput = document.getElementById('chat-input');
 		let word = '';

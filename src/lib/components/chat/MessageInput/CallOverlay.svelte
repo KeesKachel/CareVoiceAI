@@ -22,7 +22,7 @@
 	export let files;
 	export let chatId;
 	export let modelId;
-	export let onTranscription: Function = null; // Callback to add text to input
+	export let onTranscription: Function = null; // Callback for transcription (e.g., for Notes)
 
 	let wakeLock = null;
 
@@ -43,12 +43,6 @@
 	let mediaRecorder;
 	let audioStream = null;
 	let audioChunks = [];
-	
-	// Real-time transcription
-	let realtimeSocket = null;
-	let realtimeTranscription = "";
-	let useRealtimeTranscription = false;
-	let transcriptionAddedFeedback = false; // Visual feedback when text added to input
 
 	let videoInputDevices = [];
 	let selectedVideoInputDeviceId = null;
@@ -154,108 +148,6 @@
 	const MIN_DECIBELS = -55;
 	const VISUALIZER_BUFFER_LENGTH = 300;
 
-	const startRealtimeTranscription = async () => {
-		if (!$config?.audio?.stt?.azure_api_key || !$config?.audio?.stt?.azure_region) {
-			console.log('Azure credentials not configured, using batch transcription');
-			return false;
-		}
-
-		try {
-			const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-			const wsUrl = `${protocol}//${window.location.host}/api/v1/audio/transcriptions/stream`;
-
-			realtimeSocket = new WebSocket(wsUrl);
-
-			realtimeSocket.onopen = () => {
-				console.log('Real-time transcription WebSocket connected');
-				realtimeSocket.send(JSON.stringify({
-					type: 'init',
-					api_key: $config.audio.stt.azure_api_key,
-					region: $config.audio.stt.azure_region,
-					language: $settings?.audio?.stt?.language || 'en-US'
-				}));
-			};
-
-			realtimeSocket.onmessage = (event) => {
-				try {
-					const data = JSON.parse(event.data);
-					
-					if (data.type === 'partial') {
-						realtimeTranscription = data.text;
-					} else if (data.type === 'final') {
-						realtimeTranscription = data.text;
-					} else if (data.type === 'error') {
-						console.error('Transcription error:', data.message);
-						toast.error($i18n.t('Transcription error: {{error}}', { error: data.message }));
-						useRealtimeTranscription = false;
-					} else if (data.type === 'ready') {
-						console.log('Real-time transcription ready');
-						useRealtimeTranscription = true;
-					}
-				} catch (error) {
-					console.error('Error parsing WebSocket message:', error);
-				}
-			};
-
-			realtimeSocket.onerror = (error) => {
-				console.error('WebSocket error:', error);
-				useRealtimeTranscription = false;
-			};
-
-			realtimeSocket.onclose = () => {
-				console.log('Real-time transcription WebSocket closed');
-			};
-			
-			return true;
-		} catch (error) {
-			console.error('Error starting real-time transcription:', error);
-			return false;
-		}
-	};
-
-	const stopRealtimeTranscription = () => {
-		if (realtimeSocket) {
-			try {
-				realtimeSocket.send(JSON.stringify({ type: 'stop' }));
-				realtimeSocket.close();
-			} catch (error) {
-				console.error('Error stopping real-time transcription:', error);
-			}
-			realtimeSocket = null;
-		}
-		useRealtimeTranscription = false;
-	};
-
-	const sendAudioToRealtimeTranscription = (audioData: ArrayBuffer) => {
-		if (realtimeSocket && realtimeSocket.readyState === WebSocket.OPEN) {
-			realtimeSocket.send(audioData);
-		}
-	};
-
-	const addTranscriptionToInput = () => {
-		if (realtimeTranscription.trim() !== '') {
-			// Call callback to add text to input field
-			if (onTranscription) {
-				onTranscription(realtimeTranscription);
-			} else {
-				// Fallback: dispatch event
-				dispatch('transcription', { text: realtimeTranscription });
-			}
-			
-			// Show visual feedback
-			transcriptionAddedFeedback = true;
-			setTimeout(() => {
-				transcriptionAddedFeedback = false;
-			}, 2000);
-			
-			// Don't close voice mode - keep listening!
-			// User can manually close when done
-			
-			// Reset transcription for next input
-			realtimeTranscription = "";
-		}
-	};
-
 	const transcribeHandler = async (audioBlob) => {
 		// Create a blob from the audio chunks
 
@@ -275,22 +167,14 @@
 			console.log(res.text);
 
 			if (res.text !== '') {
-				// Call callback or dispatch event to add to input field
+				// If onTranscription callback is provided (e.g., for Notes), use it
 				if (onTranscription) {
 					onTranscription(res.text);
 				} else {
-					dispatch('transcription', { text: res.text });
+					// Otherwise, use submitPrompt (for Chat)
+					const _responses = await submitPrompt(res.text, { _raw: true });
+					console.log(_responses);
 				}
-				
-				// Show visual feedback
-				transcriptionAddedFeedback = true;
-				setTimeout(() => {
-					transcriptionAddedFeedback = false;
-				}, 2000);
-				
-				// Don't close voice mode - keep listening!
-				// showCallOverlay.set(false);
-				// dispatch('close');
 			}
 		}
 	};
@@ -324,13 +208,8 @@
 					];
 				}
 
-				// Use realtime transcription if available, otherwise fall back to batch
-				if (useRealtimeTranscription && realtimeTranscription.trim() !== '') {
-					addTranscriptionToInput();
-				} else {
-					const audioBlob = new Blob(_audioChunks, { type: 'audio/wav' });
-					await transcribeHandler(audioBlob);
-				}
+				const audioBlob = new Blob(_audioChunks, { type: 'audio/wav' });
+				await transcribeHandler(audioBlob);
 
 				confirmed = false;
 				loading = false;
@@ -358,12 +237,6 @@
 					}
 				});
 			}
-			
-			// Try to start realtime transcription
-			if ($config?.audio?.stt?.engine === 'azure') {
-				await startRealtimeTranscription();
-			}
-			
 			mediaRecorder = new MediaRecorder(audioStream);
 
 			mediaRecorder.onstart = () => {
@@ -374,13 +247,6 @@
 			mediaRecorder.ondataavailable = (event) => {
 				if (hasStartedSpeaking) {
 					audioChunks.push(event.data);
-					
-					// Stream to realtime transcription if enabled
-					if (useRealtimeTranscription && event.data.size > 0) {
-						event.data.arrayBuffer().then(buffer => {
-							sendAudioToRealtimeTranscription(buffer);
-						});
-					}
 				}
 			};
 
@@ -466,12 +332,7 @@
 					// BIG RED TEXT
 					console.log('%c%s', 'color: red; font-size: 20px;', '🔊 Sound detected');
 					if (mediaRecorder && mediaRecorder.state !== 'recording') {
-						// Start with timeslice for real-time streaming (250ms chunks)
-						if (useRealtimeTranscription) {
-							mediaRecorder.start(250);
-						} else {
-							mediaRecorder.start();
-						}
+						mediaRecorder.start();
 					}
 
 					if (!hasStartedSpeaking) {
@@ -824,8 +685,6 @@
 		await stopCamera();
 
 		await stopAudioStream();
-		stopRealtimeTranscription();
-		
 		eventTarget.removeEventListener('chat:start', chatStartHandler);
 		eventTarget.removeEventListener('chat', chatEventHandler);
 		eventTarget.removeEventListener('chat:finish', chatFinishHandler);
@@ -922,30 +781,6 @@
 		{/if}
 
 		<div class="flex justify-center items-center flex-1 h-full w-full max-h-full">
-			{#if transcriptionAddedFeedback}
-				<div class="absolute top-20 left-0 right-0 mx-auto max-w-md px-4 z-50">
-					<div class="bg-green-500 text-white rounded-lg p-3 shadow-lg flex items-center gap-2">
-						<svg xmlns="http://www.w3.org/2000/svg" class="size-5" viewBox="0 0 20 20" fill="currentColor">
-							<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
-						</svg>
-						<span class="text-sm font-medium">{$i18n.t('Added to input')}</span>
-					</div>
-				</div>
-			{/if}
-			
-			{#if useRealtimeTranscription && realtimeTranscription}
-				<div class="absolute top-32 left-0 right-0 mx-auto max-w-md px-4">
-					<div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow-lg">
-						<div class="text-xs text-gray-500 dark:text-gray-400 mb-1">
-							{$i18n.t('Live transcription')}
-						</div>
-						<div class="text-sm">
-							{realtimeTranscription}
-						</div>
-					</div>
-				</div>
-			{/if}
-			
 			{#if !camera}
 				<button
 					type="button"

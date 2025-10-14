@@ -33,12 +33,14 @@
 		models,
 		settings,
 		showSidebar,
+		showCallOverlay,
 		socket,
 		user,
 		WEBUI_NAME
 	} from '$lib/stores';
 
 	import NotePanel from '$lib/components/notes/NotePanel.svelte';
+	import CallOverlay from '$lib/components/chat/MessageInput/CallOverlay.svelte';
 
 	import Controls from './NoteEditor/Controls.svelte';
 	import Chat from './NoteEditor/Chat.svelte';
@@ -74,7 +76,6 @@
 	import Image from '../common/Image.svelte';
 	import FileItem from '../common/FileItem.svelte';
 	import FilesOverlay from '../chat/MessageInput/FilesOverlay.svelte';
-	import RecordMenu from './RecordMenu.svelte';
 	import NoteMenu from './Notes/NoteMenu.svelte';
 	import EllipsisHorizontal from '../icons/EllipsisHorizontal.svelte';
 	import Sparkles from '../icons/Sparkles.svelte';
@@ -122,6 +123,10 @@
 	let recording = false;
 	let displayMediaRecord = false;
 
+	// CallOverlay support
+	let noteEventTarget = new EventTarget();
+	let showVoiceOverlay = false;
+
 	let showPanel = false;
 	let selectedPanel = 'chat';
 
@@ -162,6 +167,38 @@
 		}
 
 		loading = false;
+	};
+
+	// CallOverlay integration functions
+	const insertTranscriptionIntoNote = (text: string) => {
+		if (!editor || !text || text.trim() === '') {
+			return;
+		}
+
+		// Get current cursor position or end of document
+		const { from, to } = editor.state.selection;
+		const currentPos = to;
+
+		// Add space before text if there's already content
+		const textToInsert = currentPos > 0 ? ' ' + text : text;
+
+		// Insert at cursor position
+		editor.chain().focus().insertContentAt(currentPos, textToInsert).run();
+
+		// Trigger auto-save
+		changeDebounceHandler();
+
+		console.log('Transcription inserted into note:', text);
+	};
+
+	const dummySubmitPrompt = () => {
+		// Not needed for Notes - transcription is handled by insertTranscriptionIntoNote
+		console.log('submitPrompt called in Notes context');
+	};
+
+	const dummyStopResponse = () => {
+		// Not needed for Notes
+		console.log('stopResponse called in Notes context');
 	};
 
 	let debounceTimeout: NodeJS.Timeout | null = null;
@@ -1332,63 +1369,19 @@ Provide the enhanced notes in markdown format. Use markdown syntax for headings,
 							}}
 						/>
 					</div>
-				{:else}
-					<RecordMenu
-						onRecord={async () => {
-							displayMediaRecord = false;
-
-							try {
-								let stream = await navigator.mediaDevices
-									.getUserMedia({ audio: true })
-									.catch(function (err) {
-										toast.error(
-											$i18n.t(`Permission denied when accessing microphone: {{error}}`, {
-												error: err
-											})
-										);
-										return null;
-									});
-
-								if (stream) {
-									recording = true;
-									const tracks = stream.getTracks();
-									tracks.forEach((track) => track.stop());
-								}
-								stream = null;
-							} catch {
-								toast.error($i18n.t('Permission denied when accessing microphone'));
-							}
+			{:else}
+				<Tooltip content={$i18n.t('Voice Mode (Real-time)')} placement="top">
+					<button
+						class="cursor-pointer p-2.5 flex rounded-full border border-gray-50 bg-white dark:border-none dark:bg-gray-850 hover:bg-gray-50 dark:hover:bg-gray-800 transition shadow-xl"
+						on:click={() => {
+							showVoiceOverlay = true;
+							showCallOverlay.set(true);
 						}}
-						onCaptureAudio={async () => {
-							displayMediaRecord = true;
-
-							recording = true;
-						}}
-						onUpload={async () => {
-							const input = document.createElement('input');
-							input.type = 'file';
-							input.accept = 'audio/*';
-							input.multiple = false;
-							input.click();
-
-							input.onchange = async (e) => {
-								const files = e.target.files;
-
-								if (files && files.length > 0) {
-									await uploadFileHandler(files[0]);
-								}
-							};
-						}}
+						type="button"
 					>
-						<Tooltip content={$i18n.t('Record')} placement="top">
-							<div
-								class="cursor-pointer p-2.5 flex rounded-full border border-gray-50 bg-white dark:border-none dark:bg-gray-850 hover:bg-gray-50 dark:hover:bg-gray-800 transition shadow-xl"
-							>
-								<MicSolid className="size-4.5" />
-							</div>
-						</Tooltip>
-					</RecordMenu>
-
+						<MicSolid className="size-4.5" />
+					</button>
+				</Tooltip>
 					<div
 						class="cursor-pointer flex gap-0.5 rounded-full border border-gray-50 dark:border-gray-850 dark:bg-gray-850 transition shadow-xl"
 					>
@@ -1460,3 +1453,21 @@ Provide the enhanced notes in markdown format. Use markdown syntax for headings,
 		{/if}
 	</NotePanel>
 </PaneGroup>
+
+{#if showVoiceOverlay && $showCallOverlay}
+	<div class="fixed right-0 top-0 bottom-0 z-50 w-[400px] max-w-[90vw] bg-gradient-to-l from-black/95 to-black/85 backdrop-blur-xl border-l border-gray-700 shadow-2xl">
+		<CallOverlay
+			eventTarget={noteEventTarget}
+			submitPrompt={dummySubmitPrompt}
+			stopResponse={dummyStopResponse}
+			bind:files
+			chatId={null}
+			modelId={selectedModelId || ($models && $models.length > 0 ? $models[0].id : null)}
+			onTranscription={insertTranscriptionIntoNote}
+			on:close={() => {
+				showVoiceOverlay = false;
+				showCallOverlay.set(false);
+			}}
+		/>
+	</div>
+{/if}

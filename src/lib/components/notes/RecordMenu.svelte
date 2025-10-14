@@ -9,15 +9,17 @@
 	import CursorArrowRays from '../icons/CursorArrowRays.svelte';
 	import DocumentArrowUp from '../icons/DocumentArrowUp.svelte';
 	import CloudArrowUp from '../icons/CloudArrowUp.svelte';
+	import Sparkles from '../icons/Sparkles.svelte';
 
 	const i18n = getContext('i18n');
 
 	export let show = false;
-	export let className = 'max-w-[170px]';
+	export let className = 'max-w-[200px]';
 
 	export let onRecord = () => {};
 	export let onCaptureAudio = () => {};
 	export let onUpload = () => {};
+	export let onVoiceMode = () => {};
 
 	const dispatch = createEventDispatcher();
 </script>
@@ -51,6 +53,19 @@
 					<Mic className="size-4" strokeWidth="2" />
 				</div>
 				<div class=" self-center truncate">{$i18n.t('Record')}</div>
+			</button>
+
+			<button
+				class="flex rounded-md py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition border-l-2 border-blue-500"
+				on:click={() => {
+					onVoiceMode();
+					show = false;
+				}}
+			>
+				<div class=" self-center mr-2">
+					<Sparkles className="size-4" strokeWidth="2" />
+				</div>
+				<div class=" self-center truncate">{$i18n.t('Voice Mode (Real-time)')}</div>
 			</button>
 
 			<button
