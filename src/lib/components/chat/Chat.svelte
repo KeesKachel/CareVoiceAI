@@ -546,7 +546,24 @@
 					codeInterpreterEnabled = input.codeInterpreterEnabled;
 				}
 			} catch (e) {}
+
+		// Check for pending note file from Notes page
+		const pendingFileStr = sessionStorage.getItem('pendingChatFile');
+		if (pendingFileStr) {
+			try {
+				const pendingFile = JSON.parse(pendingFileStr);
+				// Add the file if it's not already in the files array
+				if (!files.find((f) => f.id === pendingFile.id)) {
+					files = [...files, pendingFile];
+				}
+				// Clear the pending file from sessionStorage
+				sessionStorage.removeItem('pendingChatFile');
+			} catch (e) {
+				console.error('Failed to load pending chat file:', e);
+			}
 		}
+
+	}
 
 		showControls.subscribe(async (value) => {
 			if (controlPane && !$mobile) {

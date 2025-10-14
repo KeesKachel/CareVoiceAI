@@ -201,6 +201,30 @@
 		console.log('stopResponse called in Notes context');
 	};
 
+	const addNoteToChatHandler = async () => {
+		// Prepare note data as a file object similar to how it's added via @ command
+		const noteFile = {
+			id: note.id,
+			type: 'note',
+			name: note.title || 'Untitled',
+			collection_name: note.id,
+			status: 'processed',
+			file: {
+				data: {
+					content: note.data.content.md || note.data.content.html || ''
+				}
+			}
+		};
+
+		// Store the note file in sessionStorage so it can be picked up by the new chat
+		sessionStorage.setItem('pendingChatFile', JSON.stringify(noteFile));
+		
+		// Navigate to new chat
+		await goto('/');
+		
+		toast.success($i18n.t('Note added to chat'));
+	};
+
 	let debounceTimeout: NodeJS.Timeout | null = null;
 
 	const changeDebounceHandler = () => {
@@ -1405,6 +1429,7 @@ Provide the enhanced notes in markdown format. Use markdown syntax for headings,
 										showPanel = true;
 										selectedPanel = 'chat';
 									}}
+							onAddToChat={addNoteToChatHandler}
 								>
 									<div
 										class="cursor-pointer p-2.5 flex rounded-full border border-gray-50 bg-white dark:border-none dark:bg-gray-850 hover:bg-gray-50 dark:hover:bg-gray-800 transition shadow-xl"

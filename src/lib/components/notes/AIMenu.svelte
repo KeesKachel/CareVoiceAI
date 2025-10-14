@@ -16,6 +16,7 @@
 
 	export let onEdit = () => {};
 	export let onChat = () => {};
+	export let onAddToChat = () => {};
 
 	export let onChange = () => {};
 </script>
@@ -57,6 +58,19 @@
 					<ChatBubbleOval className="size-4" strokeWidth="2" />
 				</div>
 				<div class=" self-center truncate">{$i18n.t('Chat')}</div>
+			</button>
+
+			<button
+				class="flex rounded-md py-1.5 px-3 w-full hover:bg-gray-50 dark:hover:bg-gray-800 transition"
+				on:click={() => {
+					onAddToChat();
+					show = false;
+				}}
+			>
+				<div class=" self-center mr-2">
+					<ChatBubbleOval className="size-4" strokeWidth="2" />
+				</div>
+				<div class=" self-center truncate">{$i18n.t('Add to New Chat')}</div>
 			</button>
 		</DropdownMenu.Content>
 	</slot>
