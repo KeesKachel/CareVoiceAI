@@ -194,3 +194,122 @@ export const getVoices = async (token: string = '') => {
 
 	return res;
 };
+
+/**
+ * Creates a WebSocket connection for real-time speech-to-text transcription using Azure Speech Service
+ * @param token - Authentication token
+ * @param onPartialResult - Callback for partial transcription results
+ * @param onFinalResult - Callback for final transcription results
+ * @param onError - Callback for errors
+ * @param apiKey - Azure Speech API key
+ * @param region - Azure region (default: 'eastus')
+ * @param language - Language code (default: 'nl-NL')
+ * @returns Object with methods to control the WebSocket connection
+ */
+export const createRealtimeTranscriptionStream = (
+	token: string,
+	onPartialResult: (text: string) => void,
+	onFinalResult: (text: string) => void,
+	onError: (error: string) => void,
+	apiKey: string = 'beNKOhW4yokhToiUY0yc0pQc84Ag0ulHCtrw3jVIjxogVuP4VNVRJQQJ99BJACfhMk5XJ3w3AAAYACOG3R7c',
+	region: string = 'swedencentral',
+	language: string = 'nl-NL'
+) => {
+	const wsUrl = AUDIO_API_BASE_URL.replace('http', 'ws') + '/transcriptions/stream';
+	let ws: WebSocket | null = null;
+	let isReady = false;
+
+	const connect = () => {
+		return new Promise<void>((resolve, reject) => {
+			ws = new WebSocket(wsUrl);
+
+			ws.onopen = () => {
+				console.log('🎤 Real-time transcription WebSocket connected');
+				// Send initialization message
+				ws?.send(
+					JSON.stringify({
+						type: 'init',
+						api_key: apiKey,
+						region: region,
+						language: language
+					})
+				);
+			};
+
+			ws.onmessage = (event) => {
+				try {
+					const data = JSON.parse(event.data);
+
+					switch (data.type) {
+						case 'ready':
+							console.log('✅ Real-time transcription ready');
+							isReady = true;
+							resolve();
+							break;
+
+						case 'partial':
+							console.log('📝 Partial transcription:', data.text);
+							onPartialResult(data.text);
+							break;
+
+						case 'final':
+							console.log('✅ Final transcription:', data.text);
+							onFinalResult(data.text);
+							break;
+
+						case 'error':
+							console.error('❌ Transcription error:', data.message);
+							onError(data.message);
+							reject(new Error(data.message));
+							break;
+
+						default:
+							console.log('Unknown message type:', data.type);
+					}
+				} catch (error) {
+					console.error('Error parsing WebSocket message:', error);
+					onError('Failed to parse server message');
+				}
+			};
+
+			ws.onerror = (error) => {
+				console.error('❌ WebSocket error:', error);
+				onError('WebSocket connection error');
+				reject(error);
+			};
+
+			ws.onclose = () => {
+				console.log('🔌 Real-time transcription WebSocket closed');
+				isReady = false;
+			};
+		});
+	};
+
+	const sendAudio = (audioData: ArrayBuffer) => {
+		if (ws && ws.readyState === WebSocket.OPEN && isReady) {
+			ws.send(audioData);
+		} else {
+			console.warn('WebSocket not ready, cannot send audio');
+		}
+	};
+
+	const stop = () => {
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			ws.send(JSON.stringify({ type: 'stop' }));
+			ws.close();
+		}
+		ws = null;
+		isReady = false;
+	};
+
+	const isConnected = () => {
+		return ws !== null && ws.readyState === WebSocket.OPEN && isReady;
+	};
+
+	return {
+		connect,
+		sendAudio,
+		stop,
+		isConnected
+	};
+};

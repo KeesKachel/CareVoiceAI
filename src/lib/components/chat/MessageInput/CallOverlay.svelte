@@ -6,7 +6,7 @@
 
 	import { blobToFile } from '$lib/utils';
 	import { generateEmoji } from '$lib/apis';
-	import { synthesizeOpenAISpeech, transcribeAudio } from '$lib/apis/audio';
+	import { synthesizeOpenAISpeech, transcribeAudio, createRealtimeTranscriptionStream, getAudioConfig } from '$lib/apis/audio';
 
 	import { toast } from 'svelte-sonner';
 
@@ -43,6 +43,15 @@
 	let mediaRecorder;
 	let audioStream = null;
 	let audioChunks = [];
+
+	// Real-time transcription variables
+	let realtimeTranscription = null;
+	let useRealtimeTranscription = false;
+	let partialTranscript = '';
+	let fullTranscript = '';
+	let audioContext = null;
+	let audioProcessor = null;
+	let audioConfig = null;
 
 	let videoInputDevices = [];
 	let selectedVideoInputDeviceId = null;
@@ -233,29 +242,44 @@
 					audio: {
 						echoCancellation: true,
 						noiseSuppression: true,
-						autoGainControl: true
+						autoGainControl: true,
+						sampleRate: 16000 // Azure Speech Service prefers 16kHz
 					}
 				});
 			}
-			mediaRecorder = new MediaRecorder(audioStream);
 
-			mediaRecorder.onstart = () => {
-				console.log('Recording started');
-				audioChunks = [];
-			};
+			// Try to initialize real-time transcription
+			await initRealtimeTranscription();
 
-			mediaRecorder.ondataavailable = (event) => {
-				if (hasStartedSpeaking) {
-					audioChunks.push(event.data);
-				}
-			};
+			if (useRealtimeTranscription) {
+				// Use real-time transcription via WebSocket
+				console.log('🎤 Using real-time Azure Speech transcription');
+				await startRealtimeAudioProcessing(audioStream);
+				// Still run audio analysis for visualization and voice activity detection
+				analyseAudio(audioStream);
+			} else {
+				// Fall back to the original recording method
+				console.log('🎤 Using traditional recording and transcription');
+				mediaRecorder = new MediaRecorder(audioStream);
 
-			mediaRecorder.onstop = (e) => {
-				console.log('Recording stopped', audioStream, e);
-				stopRecordingCallback();
-			};
+				mediaRecorder.onstart = () => {
+					console.log('Recording started');
+					audioChunks = [];
+				};
 
-			analyseAudio(audioStream);
+				mediaRecorder.ondataavailable = (event) => {
+					if (hasStartedSpeaking) {
+						audioChunks.push(event.data);
+					}
+				};
+
+				mediaRecorder.onstop = (e) => {
+					console.log('Recording stopped', audioStream, e);
+					stopRecordingCallback();
+				};
+
+				analyseAudio(audioStream);
+			}
 		}
 	};
 
@@ -275,6 +299,168 @@
 		});
 
 		audioStream = null;
+	};
+
+	// Real-time transcription functions
+	const initRealtimeTranscription = async () => {
+		// Fetch audio config if not already loaded
+		if (!audioConfig) {
+			try {
+				audioConfig = await getAudioConfig(localStorage.token);
+			} catch (error) {
+				console.error('Failed to fetch audio config:', error);
+				useRealtimeTranscription = false;
+				return;
+			}
+		}
+
+		// Check if Azure STT is configured and enabled
+		const sttEngine = audioConfig?.stt?.ENGINE || '';
+		if (sttEngine !== 'azure') {
+			console.log('Real-time transcription requires Azure STT engine, current engine:', sttEngine);
+			useRealtimeTranscription = false;
+			return;
+		}
+
+		// Get Azure config from audioConfig
+		const azureApiKey = audioConfig?.stt?.AZURE_API_KEY;
+		const azureRegion = audioConfig?.stt?.AZURE_REGION || 'westeurope';
+		const language = $settings?.audio?.stt?.language || 'nl-NL';
+
+		if (!azureApiKey || !azureRegion) {
+			console.log('Azure API key or region not configured, falling back to regular transcription');
+			console.log('API Key present:', !!azureApiKey, 'Region:', azureRegion);
+			useRealtimeTranscription = false;
+			return;
+		}
+
+		try {
+			realtimeTranscription = createRealtimeTranscriptionStream(
+				localStorage.token,
+				(text) => {
+					// Partial result callback
+					partialTranscript = text;
+					console.log('📝 Partial:', text);
+				},
+				async (text) => {
+					// Final result callback
+					fullTranscript = text;
+					console.log('✅ Final:', text);
+					console.log('📤 Submitting prompt with text:', text);
+					
+					// Submit the final transcription
+					if (text && text.trim() !== '') {
+						loading = true;
+						emoji = null;
+
+						if (cameraStream) {
+							const imageUrl = takeScreenshot();
+							files = [
+								{
+									type: 'image',
+									url: imageUrl
+								}
+							];
+						}
+
+						try {
+							// If onTranscription callback is provided (e.g., for Notes), use it
+							if (onTranscription) {
+								console.log('📝 Using onTranscription callback');
+								onTranscription(text);
+							} else {
+								// Otherwise, use submitPrompt (for Chat)
+								console.log('💬 Using submitPrompt for chat');
+								const response = await submitPrompt(text, { _raw: true });
+								console.log('📨 Submit response:', response);
+							}
+						} catch (error) {
+							console.error('❌ Error submitting prompt:', error);
+							toast.error(`Failed to submit: ${error}`);
+						}
+
+						// Reset transcripts
+						partialTranscript = '';
+						fullTranscript = '';
+						loading = false;
+					} else {
+						console.warn('⚠️ Empty transcription text, not submitting');
+					}
+				},
+				(error) => {
+					// Error callback
+					console.error('❌ Transcription error:', error);
+					toast.error(`Transcription error: ${error}`);
+					useRealtimeTranscription = false;
+				},
+				azureApiKey,
+				azureRegion,
+				language
+			);
+
+			await realtimeTranscription.connect();
+			useRealtimeTranscription = true;
+			console.log('✅ Real-time transcription initialized');
+		} catch (error) {
+			console.error('Failed to initialize real-time transcription:', error);
+			toast.error('Failed to start real-time transcription');
+			useRealtimeTranscription = false;
+		}
+	};
+
+	const startRealtimeAudioProcessing = async (stream) => {
+		if (!audioContext) {
+			audioContext = new AudioContext({ sampleRate: 16000 });
+		}
+
+		const source = audioContext.createMediaStreamSource(stream);
+		
+		// Create a script processor for real-time audio processing
+		const bufferSize = 4096;
+		audioProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+		audioProcessor.onaudioprocess = (event) => {
+			if (!realtimeTranscription || !realtimeTranscription.isConnected()) {
+				return;
+			}
+
+			// Get audio data
+			const inputData = event.inputBuffer.getChannelData(0);
+			
+			// Convert Float32Array to Int16Array (PCM format expected by Azure)
+			const pcmData = new Int16Array(inputData.length);
+			for (let i = 0; i < inputData.length; i++) {
+				const s = Math.max(-1, Math.min(1, inputData[i]));
+				pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+			}
+
+			// Send audio data to WebSocket
+			realtimeTranscription.sendAudio(pcmData.buffer);
+		};
+
+		source.connect(audioProcessor);
+		audioProcessor.connect(audioContext.destination);
+	};
+
+	const stopRealtimeTranscription = () => {
+		if (audioProcessor) {
+			audioProcessor.disconnect();
+			audioProcessor = null;
+		}
+
+		if (audioContext) {
+			audioContext.close();
+			audioContext = null;
+		}
+
+		if (realtimeTranscription) {
+			realtimeTranscription.stop();
+			realtimeTranscription = null;
+		}
+
+		useRealtimeTranscription = false;
+		partialTranscript = '';
+		fullTranscript = '';
 	};
 
 	// Function to calculate the RMS level from time domain data
@@ -307,7 +493,18 @@
 
 		const detectSound = () => {
 			const processFrame = () => {
-				if (!mediaRecorder || !$showCallOverlay) {
+				// Check if CallOverlay is still active
+				if (!$showCallOverlay) {
+					return;
+				}
+
+				// For real-time transcription, check if connection is still active
+				if (useRealtimeTranscription && !realtimeTranscription?.isConnected()) {
+					return;
+				}
+
+				// For traditional recording, check if mediaRecorder exists
+				if (!useRealtimeTranscription && !mediaRecorder) {
 					return;
 				}
 
@@ -331,7 +528,9 @@
 				if (hasSound) {
 					// BIG RED TEXT
 					console.log('%c%s', 'color: red; font-size: 20px;', '🔊 Sound detected');
-					if (mediaRecorder && mediaRecorder.state !== 'recording') {
+					
+					// For traditional recording, start the mediaRecorder
+					if (!useRealtimeTranscription && mediaRecorder && mediaRecorder.state !== 'recording') {
 						mediaRecorder.start();
 					}
 
@@ -348,7 +547,14 @@
 					if (Date.now() - lastSoundTime > 2000) {
 						confirmed = true;
 
-						if (mediaRecorder) {
+						if (useRealtimeTranscription) {
+							// For real-time transcription, we don't stop here
+							// Azure will send the final result when it detects end of speech
+							console.log('%c%s', 'color: orange; font-size: 20px;', '🔇 Silence detected (real-time mode)');
+							// Reset for next utterance
+							hasStartedSpeaking = false;
+							lastSoundTime = Date.now();
+						} else if (mediaRecorder) {
 							console.log('%c%s', 'color: red; font-size: 20px;', '🔇 Silence detected');
 							mediaRecorder.stop();
 							return;
@@ -663,6 +869,7 @@
 		return async () => {
 			await stopAllAudio();
 
+			stopRealtimeTranscription();
 			stopAudioStream();
 
 			eventTarget.removeEventListener('chat:start', chatStartHandler);
@@ -684,6 +891,7 @@
 		await stopRecordingCallback(false);
 		await stopCamera();
 
+		stopRealtimeTranscription();
 		await stopAudioStream();
 		eventTarget.removeEventListener('chat:start', chatStartHandler);
 		eventTarget.removeEventListener('chat', chatEventHandler);
@@ -970,10 +1178,20 @@
 							{$i18n.t('Thinking...')}
 						{:else if assistantSpeaking}
 							{$i18n.t('Tap to interrupt')}
+						{:else if useRealtimeTranscription && partialTranscript}
+							<span class="text-gray-600 dark:text-gray-400 italic">"{partialTranscript}"</span>
 						{:else}
 							{$i18n.t('Listening...')}
 						{/if}
 					</div>
+					{#if useRealtimeTranscription}
+						<div class="text-xs text-gray-500 dark:text-gray-500 mt-0.5">
+							<span class="inline-flex items-center gap-1">
+								<span class="size-1.5 bg-green-500 rounded-full animate-pulse"></span>
+								Real-time transcription
+							</span>
+						</div>
+					{/if}
 				</button>
 			</div>
 

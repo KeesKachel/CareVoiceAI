@@ -1297,39 +1297,36 @@ async def transcribe_stream(websocket: WebSocket):
             audio_config=audio_config
         )
         
-        # Track full transcription
-        full_transcription = ""
+        # Use asyncio queue for thread-safe communication
+        import asyncio
+        message_queue = asyncio.Queue()
         
         # Event handlers for recognition
         def recognizing_cb(evt):
             """Handles partial recognition results"""
-            nonlocal full_transcription
             try:
-                import asyncio
-                asyncio.create_task(websocket.send_json({
+                message_queue.put_nowait({
                     "type": "partial",
                     "text": evt.result.text,
                     "offset": evt.result.offset,
                     "duration": evt.result.duration
-                }))
+                })
             except Exception as e:
-                log.error(f"Error sending partial result: {e}")
+                log.error(f"Error queueing partial result: {e}")
         
         def recognized_cb(evt):
             """Handles final recognition results"""
-            nonlocal full_transcription
             try:
                 if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                    full_transcription += " " + evt.result.text
-                    import asyncio
-                    asyncio.create_task(websocket.send_json({
+                    # Send only the current recognized text, not accumulated
+                    message_queue.put_nowait({
                         "type": "final",
-                        "text": full_transcription.strip(),
+                        "text": evt.result.text.strip(),
                         "offset": evt.result.offset,
                         "duration": evt.result.duration
-                    }))
+                    })
             except Exception as e:
-                log.error(f"Error sending final result: {e}")
+                log.error(f"Error queueing final result: {e}")
         
         # Connect event handlers
         speech_recognizer.recognizing.connect(recognizing_cb)
@@ -1341,27 +1338,48 @@ async def transcribe_stream(websocket: WebSocket):
         # Send ready signal
         await websocket.send_json({"type": "ready"})
         
+        # Create task to send queued messages
+        async def send_queued_messages():
+            while True:
+                try:
+                    msg = await message_queue.get()
+                    await websocket.send_json(msg)
+                except Exception as e:
+                    log.error(f"Error sending queued message: {e}")
+                    break
+        
+        # Start message sender task
+        sender_task = asyncio.create_task(send_queued_messages())
+        
         # Process incoming audio data
-        while True:
-            message = await websocket.receive()
-            
-            if message["type"] == "websocket.receive":
-                if "bytes" in message:
-                    # Audio data
-                    audio_data = message["bytes"]
-                    push_stream.write(audio_data)
-                    
-                elif "text" in message:
-                    # Control message
-                    try:
-                        data = json.loads(message["text"])
-                        if data.get("type") == "stop":
-                            break
-                    except json.JSONDecodeError:
-                        pass
+        try:
+            while True:
+                message = await websocket.receive()
+                
+                if message["type"] == "websocket.receive":
+                    if "bytes" in message:
+                        # Audio data
+                        audio_data = message["bytes"]
+                        push_stream.write(audio_data)
                         
-            elif message["type"] == "websocket.disconnect":
-                break
+                    elif "text" in message:
+                        # Control message
+                        try:
+                            data = json.loads(message["text"])
+                            if data.get("type") == "stop":
+                                break
+                        except json.JSONDecodeError:
+                            pass
+                            
+                elif message["type"] == "websocket.disconnect":
+                    break
+        finally:
+            # Cancel sender task
+            sender_task.cancel()
+            try:
+                await sender_task
+            except asyncio.CancelledError:
+                pass
         
         # Cleanup
         speech_recognizer.stop_continuous_recognition()
